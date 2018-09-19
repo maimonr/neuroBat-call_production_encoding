@@ -6,7 +6,7 @@ elseif nargin <3
     output_folder = [];
 end
 nCells = length(cell_ks);
-input = {'call_on','call_ps_pca','bioacoustics'};
+input = {'call_on'};
 mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
 permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0];
 nPermutes = size(permute_idxs,1);
@@ -38,11 +38,7 @@ end
 
 if ~isempty(output_folder)
    try
-       lmResults = struct('mdlResults',{mdlParams},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
-       save([output_folder 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'v7.3','-struct','lmResults');
-   catch err
-       keyboard
-   end
+       lmResults = struct('mdlParams',{mdlParams,
 end
 
 end
