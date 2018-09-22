@@ -22,7 +22,7 @@ spike_bin_size = 5;
 smoothing_span_size = 150;
 call_time_offset = 500;
 
-cvType = 'crossValidate';
+cvType = 'nested_cv';
 
 audio_fs = 250e3;
 winSize = 1.5e-3;
@@ -53,7 +53,9 @@ params = struct('call_time_offset',call_time_offset,'nFilt',nFilt,...
     'envelope_ds_factor',[],'max_t',[],'neural_params',neural_params,...
     'neural_data_type',neural_data_type,'minCalls',minCalls,'yinParams',yinParams,...
     'bioacoustic_feature_names',{featureNames},'pc_idx',pc_idx,'nBoot',0,'cvType',cvType,...
-    'mdlParams',mdlParams);
+    'mdlParams',mdlParams,'bandedRidge',true);
+
+nInput = length(inputs);
 
 cut_call_data = get_cut_call_data(batParams,params);
 
@@ -108,11 +110,34 @@ end
 
 nChannel = size(neural_call_data,2);
 
-call_feats = cell(1,length(inputs));
-for input_k = 1:length(inputs)
+call_feats = cell(1,nInput);
+for input_k = 1:nInput
     call_feats{input_k} = get_feature(inputs{input_k},call_wf,cut_call_data,...
         all_call_timestamps,included_call_times,included_call_ks,params);
 end
+
+nPreds_per_feat = cellfun(@(x) size(x,1),call_feats);
+nPreds = sum(nPreds_per_feat);
+p = nPreds*nFilt;
+
+if params.bandedRidge
+    pred_idxs = cell(1,nInput);
+    all_pred_k = 1;
+    for input_k = 1:nInput
+        input_pred_idx = zeros(nPreds_per_feat(input_k),nFilt);
+        for pred_k = 1:nPreds_per_feat(input_k)
+            input_pred_idx(pred_k,:) = all_pred_k:nPreds:p;
+            all_pred_k = all_pred_k + 1;
+        end
+        pred_idxs{input_k} = reshape(input_pred_idx,1,[]);
+    end
+    
+    assert(isempty(setdiff([pred_idxs{1},pred_idxs{2}],1:p)))
+    assert(isempty(intersect(pred_idxs{1},pred_idxs{2})))
+else
+    pred_idxs = {1:p};
+end
+
 
 if ~isempty(mdlParams.permuteInput)
     permute_input_idx = find(mdlParams.permuteInput);
@@ -146,7 +171,7 @@ end
 
 call_feats_padded = [zeros(size(call_feats,1),nFilt) call_feats_binned];
 
-design_mat = zeros(length(neural_call_data),size(call_feats_padded,1)*nFilt);
+design_mat = zeros(length(neural_call_data),p);
 for k = 1:length(neural_call_data)-offset
     design_mat(k,:) = reshape(call_feats_padded(:,k+offset:(nFilt + k - 1+offset)),1,[]);
 end
@@ -171,139 +196,101 @@ switch mdlType
         %%
         
         if ~isfield(mdlParams,'ridgeK')
-            ridgeK = logspace(2,7,8);%2.^(0.5:1:8);
+            ridgeKs = logspace(3,8,8);%2.^(0.5:1:8);
             nCV = 5;
-            nRidgeK = length(ridgeK);
-            
+            nRidgeK = length(ridgeKs);
             nObservations = length(neural_call_data);
+            mseRidge = cell(1,nCV);
+            mseCV = nan(1,nCV);
+            R2CV = nan(1,nCV);
+            rhoCV = nan(1,nCV);
             
-            mseRidge = nan(nCV,nRidgeK);
-            R2Ridge = nan(nCV,nRidgeK);
-            adj_r2_ridge = nan(nCV,nRidgeK);
-            rho_ridge = nan(nCV,nRidgeK);
+            bCV = nan(p+1,nCV);
+            b_scaled_CV = nan(p,nCV);
             
-            p = size(design_mat,2);
-            [Z, muX, sigmaX] = zscore(design_mat);
+            logLikelihoodCV = nan(1,nCV);
+
             tic;
             switch params.cvType
-
+                
+                case 'nested_cv'
+                    n_nest_cv = 5;
+                    nested_cv_idx = get_cv_idx(nObservations,nCV);
+                    for nest_cv_k = 1:n_nest_cv
+                        nested_testIdx = nested_cv_idx(1,nest_cv_k):nested_cv_idx(2,nest_cv_k)-1;
+                            
+                        nested_trainIdx = setdiff(1:nObservations,nested_testIdx);
+                        nested_nObservations = length(nested_trainIdx);
+                        cv_idx = get_cv_idx(nested_nObservations,nCV);
+                        nested_design_mat = design_mat(nested_trainIdx,:);
+                        
+                        nested_yTrain = neural_call_data(nested_trainIdx);
+                        
+                        for cv_k = 1:nCV
+                            testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
+                            
+                            trainIdx = setdiff(1:nested_nObservations,testIdx);
+                            Xtest = nested_design_mat(testIdx,:);
+                            yTrain = nested_yTrain(trainIdx);
+                            yTest = nested_yTrain(testIdx);
+                            [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(nested_design_mat,trainIdx,yTrain);
+                            [~,~,mseRidge{nest_cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
+                            
+                        end
+                        
+                        nested_yTest = neural_call_data(nested_testIdx);
+                        nested_Xtest = design_mat(nested_testIdx,:);
+                        [~,idx] = min(mseRidge{nest_cv_k}(:));
+                        band_ridge_idx = cell(1,nInput);
+                        [band_ridge_idx{1:nInput}] = ind2sub(size(mseRidge{nest_cv_k}),idx);
+                        band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
+                        lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
+                        
+                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,nested_trainIdx,nested_yTrain);
+                        [bCV(:,nest_cv_k),b_scaled_CV(:,nest_cv_k)] = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
+                        [mseCV(nest_cv_k),R2CV(nest_cv_k),rhoCV(nest_cv_k),logLikelihoodCV(nest_cv_k)] = assess_ridge_mdl_fit(bCV(:,nest_cv_k),nested_Xtest,nested_yTest);
+                    end
+                    
                 case 'crossValidate'
-                    cv_idx = round(linspace(1,nObservations+1,nCV+1));
-                    cv_idx_reshape = vertcat(circshift(cv_idx,1),cv_idx);
-                    cv_idx_reshape = cv_idx_reshape(:,2:end);
-                    cv_idx_perm = cv_idx_reshape(:,randperm(size(cv_idx_reshape,2)));
-                    for c = 1:nCV
-                        testIdx = cv_idx_perm(1,c):cv_idx_perm(2,c)-1;
-
+                    cv_idx = get_cv_idx(nObservations,nCV);
+                    for cv_k = 1:nCV
+                        testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
+                        
                         trainIdx = setdiff(1:nObservations,testIdx);
-                        [Ztrain, muX_train, sigmaX_train] = zscore(design_mat(trainIdx,:));
                         Xtest = design_mat(testIdx,:);
                         yTrain = neural_call_data(trainIdx);
                         yTest = neural_call_data(testIdx);
-                        nTest = length(yTest);
-
-                        ZTZ = Ztrain'*Ztrain;
-                        ZTy = (Ztrain'*yTrain);
-                        id_mat = eye(size(Ztrain,2));
-                        for k = 1:nRidgeK
-                            
-                            bTrain_scaled = (ZTZ + ridgeK(k)*id_mat)\ZTy;
-                            b = bTrain_scaled ./ sigmaX_train';
-                            b = [mean(yTrain)-muX_train*b; b];
-                            
-                            predSpikes = b(1) + Xtest*b(2:end);
-                            
-                            mseRidge(c,k) = mean((yTest - predSpikes).^2);
-                            rss = mean((yTest - mean(yTest)).^2);
-                            R2Ridge(c,k) = 1-mseRidge(c,k)/rss;
-                            adj_r2_ridge(c,k) = 1-((1-R2Ridge(c,k))*((nTest-1)/(nTest-p-1)));
-                            rho = corrcoef(predSpikes-b(1),yTest-mean(yTest));
-                            rho_ridge(c,k) = rho(2);
-                        end
-                    end
-                case 'subsample'
-                    trainProp = 0.8;
-                    nTrain = round(nObservations*trainProp);
-                    nTest = nObservations - nTrain;
-                    for c = 1:nCV
-                        trainIdx = randperm(nObservations,nTrain);
-                        testIdx = setdiff(1:nObservations,trainIdx);
-                        [Ztrain, muX_train, sigmaX_train] = zscore(design_mat(trainIdx,:));
-                        Xtest = design_mat(testIdx,:);
-                        yTrain = neural_call_data(trainIdx);
                         
-                        ZTZ = Ztrain'*Ztrain;
-                        ZTy = (Ztrain'*yTrain);
-                        id_mat = eye(size(Ztrain,2));
-                        for k = 1:nRidgeK
-                            
-                            bTrain_scaled = (ZTZ + ridgeK(k)*id_mat)\ZTy;
-                            b = bTrain_scaled ./ sigmaX_train';
-                            b = [mean(yTrain)-muX_train*b; b]; %#ok<AGROW>
-                            
-                            predSpikes = b(1) + Xtest*b(2:end);
-                            
-                            mseRidge(c,k) = mean((neural_call_data(testIdx) - predSpikes).^2);
-                            rss = mean((neural_call_data(testIdx)-mean(neural_call_data(testIdx))).^2);
-                            R2Ridge(c,k) = 1-mseRidge(c,k)/rss;
-                            adj_r2_ridge(c,k) = 1-((1-R2Ridge(c,k))*((nTest-1)/(nTest-p-1)));
-                        end
+                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,trainIdx,yTrain);
+                        [~,~,mseRidge] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
+                        
+                        [~,min_mse_idx] = min(nanmean(mseRidge,1));
+                        min_ridge_k = ridgeKs(min_mse_idx);
                     end
             end
-            
-            [~,min_mse_idx] = min(nanmean(mseRidge,1));
-            min_ridge_k = ridgeK(min_mse_idx);
         else
-            ridgeK = mdlParams.ridgeK;
+            ridgeKs = mdlParams.ridgeK;
             min_mse_idx = 1;
-            min_ridge_k = ridgeK;
+            min_ridge_k = ridgeKs;
             mseRidge = 0;
         end
         
         t = toc;
         %%
         
-        mseBootstrap = nan(1,params.nBoot);
-        R2Bootstrap = nan(1,params.nBoot);
-        for boot_k = 1:params.nBoot
-            trainIdx = randperm(nObservations,nTrain);
-            testIdx = setdiff(1:nObservations,trainIdx);
-            
-            [Ztrain, muX_train, sigmaX_train] = zscore(design_mat(trainIdx,:));
-            Xtest = design_mat(testIdx,:);
-            
-            yTrain = neural_call_data(trainIdx);
-            
-            bTrain_scaled = (Ztrain'*Ztrain + min_ridge_k*eye(size(Ztrain,2)))\(Ztrain'*yTrain);
-            b = bTrain_scaled ./ sigmaX_train';
-            b = [mean(yTrain)-muX_train*b; b]; %#ok<AGROW>
-            
-            predSpikes = b(1) + Xtest*b(2:end);
-            rss = mean((neural_call_data(testIdx)-mean(neural_call_data(testIdx))).^2);
-            mseBootstrap(boot_k) = mean((neural_call_data(testIdx) - predSpikes).^2);
-            R2Bootstrap(boot_k) = 1-mseBootstrap(boot_k)/rss;
-        end
-        
-        ridge_k_mat =  min_ridge_k*eye(size(Z,2));
-        ZTZ = Z'*Z;
-        ZTZ_lambda = (ZTZ + ridge_k_mat);
-        y = neural_call_data;
-        b_scaled = (ZTZ_lambda)\(Z'*y);
-        b = b_scaled ./ sigmaX';
-        b = [mean(y)-muX*b; b];
-        %%
-        predSpikes = b(1) + design_mat*b(2:end);
-        residuals = neural_call_data - predSpikes ;
-        mse = mean(residuals.^2);
-        
-        rss = mean((neural_call_data-mean(neural_call_data)).^2);
-        R2 = 1-mse/rss;
         n = length(neural_call_data);
-        adj_r2 = 1-((1-R2)*((n-1)/(n-p-1)));
-        sigmaHat = sqrt(mse);
-        logLikelihood = -n*0.5*log(2*pi) - n*log(sigmaHat) - (1/(2*(sigmaHat^2)))*sum(residuals.^2);
+        mseRidge_avg = cat(nCV+1,mseRidge{:});
+        mseRidge_avg = mean(mseRidge_avg,nCV+1);
+        [~,idx] = min(mseRidge_avg(:));
+        band_ridge_idx = cell(1,nInput);
+        [band_ridge_idx{1:nInput}] = ind2sub(size(mseRidge{nest_cv_k}),idx);
+        band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
+        lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
         
-        
+        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,1:n,neural_call_data);
+        [b,b_scaled] = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
+        [mse,R2,rho,logLikelihood,predSpikes] = assess_ridge_mdl_fit(b,design_mat,neural_call_data);
+        [~, ~, sigmaX] = zscore(design_mat);
         % Using frequentist formulation of var see Cule et al. 2011
         % https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3228544/
         % test statistic: T(k) = b(k)/se(b(k)) 
@@ -311,7 +298,7 @@ switch mdlType
         % T ~ N(0,1) with large n
         nu = n - p;
         sig_sq_noise = ((neural_call_data - predSpikes)'*(neural_call_data - predSpikes))/nu;
-        posterior_cov = sig_sq_noise*(ZTZ_lambda\(ZTZ/ZTZ_lambda));
+        posterior_cov = sig_sq_noise*((ZTZ + lambda_mat)\(ZTZ/(ZTZ + lambda_mat)));
         
         % Alternate Bayesian formulation:
         %         sig_sq_noise = var(y - Z*b_scaled);
@@ -321,12 +308,11 @@ switch mdlType
         
         sta_t = -offset*smoothing_bin_size:smoothing_bin_size:(offset-1)*smoothing_bin_size;
         %%
-        mdlResults = struct('r2',R2,'adj_r2',adj_r2,'b',b,'b_scaled',b_scaled,...
+        mdlResults = struct('r2',R2,'b',b,'b_scaled',b_scaled,'rho',rho,...
             'sta_t', sta_t,'predSpikes',predSpikes,'min_ridge_k',min_ridge_k,...
-            'ridge_mse',mseRidge,'mse',mse,'b_std',posterior_std,'ridgeK',ridgeK,...
-            'adj_r2_ridge',adj_r2_ridge,'R2Ridge',R2Ridge,'min_mse_idx',min_mse_idx,...
-            'mseBootstrap',mseBootstrap,'R2Bootstrap',R2Bootstrap',...
-            'logLikelihood',logLikelihood,'rho_ridge',rho_ridge);
+            'ridge_mse',mseRidge,'mse',mse,'b_std',posterior_std,'ridgeK',ridgeKs,...
+            'R2CV',R2CV,'min_mse_idx',min_mse_idx,'logLikelihood',logLikelihood,...
+            'rhoCV',rhoCV,'logLikelihoodCV',logLikelihoodCV,'mseCV',mseCV);
         
         
     case 'lasso'
@@ -383,6 +369,88 @@ end
 if ~savioFlag
     rmpath('C:\Users\phyllo\Documents\MATLAB\yin\')
 end
+
+end
+
+function idx = get_cv_idx(nObservations,nCV)
+
+cv_idx = round(linspace(1,nObservations+1,nCV+1));
+cv_idx_reshape = vertcat(circshift(cv_idx,1),cv_idx);
+idx = cv_idx_reshape(:,2:end);
+
+end
+
+function [ZTZ,ZTy,muX,sigmaX] = get_ridge_mdl_inputs(design_mat,trainIdx,y)
+
+[Z, muX, sigmaX] = zscore(design_mat(trainIdx,:));
+ZTZ = Z'*Z;
+ZTy = (Z'*y);
+
+end
+
+function [R2,rho,mse,logLikelihood] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain)
+
+nInput = length(pred_idxs);
+nRidgeK = length(ridgeKs);
+p = length(ZTy);
+output_size = repmat(nRidgeK,1,nInput);
+if numel(output_size) == 1
+    output_size = [1 output_size];
+end
+mse = nan(output_size);
+R2 = nan(output_size);
+rho = nan(output_size);
+logLikelihood = nan(output_size);
+nIteration = prod(output_size(:));
+
+[ridgeKMat{1:nInput}] = ndgrid(ridgeKs);
+
+for k = 1:nIteration
+    
+    band_ridge_ks = cellfun(@(x) x(k),ridgeKMat);
+    lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
+
+    b = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
+    [mse(k),R2(k),rho(k),logLikelihood(k)] = assess_ridge_mdl_fit(b,Xtest,yTest);
+
+end
+
+end
+
+function lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p)
+
+lambda_vec = ones(1,p);
+
+for lambda_band_k = 1:nInput
+    lambda_vec(pred_idxs{lambda_band_k}) = band_ridge_ks(lambda_band_k);
+end
+
+lambda_mat = diag(lambda_vec);
+
+end
+
+function [b,bScaled] = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat)
+
+bScaled = (ZTZ + lambda_mat)\ZTy;
+b = bScaled ./ sigmaX_train';
+b = [mean(yTrain)-muX_train*b; b];
+
+end
+
+function [mse,R2,rho,logLikelihood,predSpikes] = assess_ridge_mdl_fit(b,Xtest,yTest)
+
+predSpikes = b(1) + Xtest*b(2:end);
+
+residuals = yTest - predSpikes ;
+mse = mean(residuals.^2);
+rss = mean((yTest - mean(yTest)).^2);
+R2 = 1-mse/rss;
+rho = corrcoef(predSpikes,yTest);
+rho = rho(2);
+
+n = length(yTest);
+sigmaHat = sqrt(mse);
+logLikelihood = -n*0.5*log(2*pi) - n*log(sigmaHat) - (1/(2*(sigmaHat^2)))*sum(residuals.^2);
 
 end
 
