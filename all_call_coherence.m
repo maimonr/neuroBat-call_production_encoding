@@ -6,7 +6,8 @@ if contains(getenv('HOSTNAME'),'ln') || contains(getenv('HOSTNAME'),'.savio') ||
    addpath(genpath('/global/home/users/maimon/code/Myfunctions')); 
 else
     savioFlag = false;
-    addpath('C:\Users\phyllo\Documents\MATLAB\yin\')
+    yinPath = genpath('C:\Program Files\MATLAB\R2018b\toolbox\yin\');
+    addpath(yinPath);
 end
 
 if nargin < 4
@@ -284,7 +285,8 @@ switch mdlType
         [~,idx] = min(mseRidge_avg(:));
         band_ridge_idx = cell(1,nInput);
         [band_ridge_idx{1:nInput}] = ind2sub(size(mseRidge{nest_cv_k}),idx);
-        band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
+        band_ridge_idx = [band_ridge_idx{:}];
+        band_ridge_ks = ridgeKs(band_ridge_idx);
         lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
         
         [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,1:n,neural_call_data);
@@ -309,9 +311,9 @@ switch mdlType
         sta_t = -offset*smoothing_bin_size:smoothing_bin_size:(offset-1)*smoothing_bin_size;
         %%
         mdlResults = struct('r2',R2,'b',b,'b_scaled',b_scaled,'rho',rho,...
-            'sta_t', sta_t,'predSpikes',predSpikes,'min_ridge_k',min_ridge_k,...
+            'sta_t', sta_t,'predSpikes',predSpikes,'min_ridge_k',band_ridge_ks,...
             'ridge_mse',mseRidge,'mse',mse,'b_std',posterior_std,'ridgeK',ridgeKs,...
-            'R2CV',R2CV,'min_mse_idx',min_mse_idx,'logLikelihood',logLikelihood,...
+            'R2CV',R2CV,'min_mse_idx',band_ridge_idx,'logLikelihood',logLikelihood,...
             'rhoCV',rhoCV,'logLikelihoodCV',logLikelihoodCV,'mseCV',mseCV);
         
         
@@ -367,7 +369,7 @@ end
 
 
 if ~savioFlag
-    rmpath('C:\Users\phyllo\Documents\MATLAB\yin\')
+    rmpath(yinPath)
 end
 
 end
@@ -844,6 +846,12 @@ for k = 1:length(all_call_timestamps)
                 f0(inf_idx) = NaN;
                 ap0(inf_idx) = NaN;
                 
+                f0 = fillmissing(f0,'linear');
+                ap0 = fillmissing(ap0,'linear');
+                
+                f0(f0<params.yinParams.minf0) = params.yinParams.minf0;
+                f0(f0<params.yinParams.minf0) = params.yinParams.minf0;
+                
                 call_wf_feats(1,:) = log10(fillmissing(f0,'linear'));
                 call_wf_feats(2,:) = fillmissing(ap0,'linear');
                 call_wf_feats = call_wf_feats(feature_idx,:);
@@ -851,7 +859,10 @@ for k = 1:length(all_call_timestamps)
                 call_wf_feats = getCallFeatures(cut,params);
                 call_wf_feats = call_wf_feats(feature_idx-2,:);
             end
-                all_call_features{k}(feat_k,idx:idx+length(call_wf_feats)-1) = call_wf_feats;
+            if any(~isreal(call_wf_feats(:)))
+                keyboard
+            end
+            all_call_features{k}(feat_k,idx:idx+length(call_wf_feats)-1) = call_wf_feats;
         end
     end
 end
@@ -974,8 +985,8 @@ if isempty(F0)
     ap = 0;
 end
 
-F0 = smooth(F0,2);
-ap = smooth(ap,2);
+F0 = smoothdata(F0,2);
+ap = smoothdata(ap,2);
 
 end
 

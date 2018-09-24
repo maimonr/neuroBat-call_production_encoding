@@ -6,7 +6,7 @@ if contains(getenv('HOSTNAME'),'ln') || contains(getenv('HOSTNAME'),'.savio') ||
    addpath(genpath('/global/home/users/maimon/code/Myfunctions')); 
 else
     savioFlag = false;
-    addpath('C:\Users\phyllo\Documents\MATLAB\yin\')
+    addpath('C:\Program Files\MATLAB\R2016b\toolbox\yin\')
 end
 
 if nargin < 4
@@ -367,7 +367,7 @@ end
 
 
 if ~savioFlag
-    rmpath('C:\Users\phyllo\Documents\MATLAB\yin\')
+    rmpath('C:\Program Files\MATLAB\R2016b\toolbox\yin\')
 end
 
 end
@@ -844,6 +844,12 @@ for k = 1:length(all_call_timestamps)
                 f0(inf_idx) = NaN;
                 ap0(inf_idx) = NaN;
                 
+                f0 = fillmissing(f0,'linear');
+                ap0 = fillmissing(ap0,'linear');
+                
+                f0(f0<params.yinParams.minf0) = params.yinParams.minf0;
+                f0(f0<params.yinParams.minf0) = params.yinParams.minf0;
+                
                 call_wf_feats(1,:) = log10(fillmissing(f0,'linear'));
                 call_wf_feats(2,:) = fillmissing(ap0,'linear');
                 call_wf_feats = call_wf_feats(feature_idx,:);
@@ -851,7 +857,10 @@ for k = 1:length(all_call_timestamps)
                 call_wf_feats = getCallFeatures(cut,params);
                 call_wf_feats = call_wf_feats(feature_idx-2,:);
             end
-                all_call_features{k}(feat_k,idx:idx+length(call_wf_feats)-1) = call_wf_feats;
+            if any(~isreal(call_wf_feats(:)))
+                keyboard
+            end
+            all_call_features{k}(feat_k,idx:idx+length(call_wf_feats)-1) = call_wf_feats;
         end
     end
 end
@@ -974,8 +983,8 @@ if isempty(F0)
     ap = 0;
 end
 
-F0 = smooth(F0,2);
-ap = smooth(ap,2);
+F0 = smoothdata(F0,2);
+ap = smoothdata(ap,2);
 
 end
 
