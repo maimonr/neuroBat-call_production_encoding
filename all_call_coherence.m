@@ -1,13 +1,16 @@
 function [mdlResults, params, coherence_results, features] = all_call_coherence(batParams,inputs,mdlType,mdlParams)
 
-
+add_yin_path = false;
 if contains(getenv('HOSTNAME'),'ln') || contains(getenv('HOSTNAME'),'.savio') || contains(getenv('HOSTNAME'),'.brc')%savio Cluster
    savioFlag = true;
    addpath(genpath('/global/home/users/maimon/code/Myfunctions')); 
 else
     savioFlag = false;
-    yinPath = genpath('C:\Program Files\MATLAB\R2018b\toolbox\yin\');
-    addpath(yinPath);
+    if ~exist('yin','file')
+        yinPath = genpath('C:\Program Files\MATLAB\R2018b\toolbox\yin\');
+        add_yin_path = true;
+        addpath(yinPath);
+    end
 end
 
 if nargin < 4
@@ -197,11 +200,10 @@ switch mdlType
         %%
         
         if ~isfield(mdlParams,'ridgeK')
-            ridgeKs = logspace(3,8,8);%2.^(0.5:1:8);
+            ridgeKs = logspace(3,7,5);%2.^(0.5:1:8);
             nCV = 5;
             nRidgeK = length(ridgeKs);
             nObservations = length(neural_call_data);
-            mseRidge = cell(1,nCV);
             mseCV = nan(1,nCV);
             R2CV = nan(1,nCV);
             rhoCV = nan(1,nCV);
@@ -215,7 +217,10 @@ switch mdlType
             switch params.cvType
                 
                 case 'nested_cv'
+                    iteration_k = 1;
                     n_nest_cv = 5;
+                    mseRidge = cell(1,n_nest_cv);
+                    mseRidge_nested = cell(1,n_nest_cv);
                     nested_cv_idx = get_cv_idx(nObservations,nCV);
                     for nest_cv_k = 1:n_nest_cv
                         nested_testIdx = nested_cv_idx(1,nest_cv_k):nested_cv_idx(2,nest_cv_k)-1;
@@ -226,7 +231,7 @@ switch mdlType
                         nested_design_mat = design_mat(nested_trainIdx,:);
                         
                         nested_yTrain = neural_call_data(nested_trainIdx);
-                        
+                        mseRidge_cv = cell(1,nCV);
                         for cv_k = 1:nCV
                             testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
                             
@@ -235,24 +240,31 @@ switch mdlType
                             yTrain = nested_yTrain(trainIdx);
                             yTest = nested_yTrain(testIdx);
                             [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(nested_design_mat,trainIdx,yTrain);
-                            [~,~,mseRidge{nest_cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
-                            
+                            [~,~,mseRidge_cv{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
                         end
+                        t = toc;
+                        fprintf('%d s elapsed, %d iterations\n',t,iteration_k);
+                        iteration_k = iteration_k + 1;
                         
                         nested_yTest = neural_call_data(nested_testIdx);
                         nested_Xtest = design_mat(nested_testIdx,:);
+                        
+                        mseRidge_nested{nest_cv_k} = cat(nInput+1,mseRidge_cv{:});
+                        mseRidge{nest_cv_k} = mean(mseRidge_nested{nest_cv_k},nInput+1);
                         [~,idx] = min(mseRidge{nest_cv_k}(:));
                         band_ridge_idx = cell(1,nInput);
-                        [band_ridge_idx{1:nInput}] = ind2sub(size(mseRidge{nest_cv_k}),idx);
+                        [band_ridge_idx{1:nInput}] = ind2sub(repmat(nRidgeK,1,nInput),idx);
                         band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
                         lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
                         
                         [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,nested_trainIdx,nested_yTrain);
-                        [bCV(:,nest_cv_k),b_scaled_CV(:,nest_cv_k)] = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
+                        [bCV(:,nest_cv_k),b_scaled_CV(:,nest_cv_k)] = fit_ridge_mdl(ZTZ,ZTy,nested_yTrain,muX_train,sigmaX_train,lambda_mat);
                         [mseCV(nest_cv_k),R2CV(nest_cv_k),rhoCV(nest_cv_k),logLikelihoodCV(nest_cv_k)] = assess_ridge_mdl_fit(bCV(:,nest_cv_k),nested_Xtest,nested_yTest);
                     end
                     
                 case 'crossValidate'
+                    mseRidge = cell(1,nCV);
+                    mseRidge_nested = [];
                     cv_idx = get_cv_idx(nObservations,nCV);
                     for cv_k = 1:nCV
                         testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
@@ -263,7 +275,7 @@ switch mdlType
                         yTest = neural_call_data(testIdx);
                         
                         [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,trainIdx,yTrain);
-                        [~,~,mseRidge] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
+                        [~,~,mseRidge{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
                         
                         [~,min_mse_idx] = min(nanmean(mseRidge,1));
                         min_ridge_k = ridgeKs(min_mse_idx);
@@ -280,17 +292,17 @@ switch mdlType
         %%
         
         n = length(neural_call_data);
-        mseRidge_avg = cat(nCV+1,mseRidge{:});
-        mseRidge_avg = mean(mseRidge_avg,nCV+1);
+        mseRidge_avg = mean(cat(nInput+1,mseRidge{:}),nInput+1);
         [~,idx] = min(mseRidge_avg(:));
         band_ridge_idx = cell(1,nInput);
-        [band_ridge_idx{1:nInput}] = ind2sub(size(mseRidge{nest_cv_k}),idx);
+        [band_ridge_idx{1:nInput}] = ind2sub(repmat(nRidgeK,1,nInput),idx);
         band_ridge_idx = [band_ridge_idx{:}];
+        %%
         band_ridge_ks = ridgeKs(band_ridge_idx);
         lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
         
         [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,1:n,neural_call_data);
-        [b,b_scaled] = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
+        [b,b_scaled] = fit_ridge_mdl(ZTZ,ZTy,neural_call_data,muX_train,sigmaX_train,lambda_mat);
         [mse,R2,rho,logLikelihood,predSpikes] = assess_ridge_mdl_fit(b,design_mat,neural_call_data);
         [~, ~, sigmaX] = zscore(design_mat);
         % Using frequentist formulation of var see Cule et al. 2011
@@ -314,7 +326,8 @@ switch mdlType
             'sta_t', sta_t,'predSpikes',predSpikes,'min_ridge_k',band_ridge_ks,...
             'ridge_mse',mseRidge,'mse',mse,'b_std',posterior_std,'ridgeK',ridgeKs,...
             'R2CV',R2CV,'min_mse_idx',band_ridge_idx,'logLikelihood',logLikelihood,...
-            'rhoCV',rhoCV,'logLikelihoodCV',logLikelihoodCV,'mseCV',mseCV);
+            'rhoCV',rhoCV,'logLikelihoodCV',logLikelihoodCV,'mseCV',mseCV,...
+            'mseRidge_nested',mseRidge_nested);
         
         
     case 'lasso'
@@ -368,7 +381,7 @@ switch mdlType
 end
 
 
-if ~savioFlag
+if ~savioFlag && add_yin_path
     rmpath(yinPath)
 end
 
@@ -1040,12 +1053,18 @@ switch pcaFlag
         call_ps_feature = score(:,params.pc_idx)';
         
     case 'pca_ortho'
-        v = ones(1,params.specParams.nfft);
-        v = v./norm(v);
-        call_ps_ortho = call_ps - v'*(v*call_ps);
-        [~,score] = pca(call_ps_ortho');
+        %         v = ones(1,params.specParams.nfft);
+        %         v = v./norm(v);
+        %         call_ps_ortho = call_ps - v'*(v*call_ps);
         
-        call_ps_feature = score(:,params.pc_idx)';
+        call_ps_ortho = zeros(size(call_ps));
+        call_on = call_ps(1,:)~=mode(call_ps(1,:));
+        call_ps_ortho(:,call_on) = call_ps(:,call_on) - mean(call_ps(:,call_on),2);
+        call_on = call_ps(1,:)~=mode(call_ps(1,:));
+        coef = pca(call_ps_ortho(:,call_on)');
+        score = coef*call_ps_ortho;
+        
+        call_ps_feature = score(params.pc_idx,:);
         
     case 'freq_bins'
         
