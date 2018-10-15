@@ -1,16 +1,27 @@
-function [mdlResults, params, cell_ks, input] = batch_all_call_coherence(vdCall,cell_ks,dataDir,output_folder)
-if nargin < 2
-    cell_ks = [vdCall.responsive_cells_by_bat{[1 2 4]}];
-    dataDir = 'C:\Users\phyllo\Documents\Maimon\ephys\data_analysis_results\data_for_export\all_call_spike_data\';
-    output_folder = [];
-elseif nargin <3
-    dataDir = 'C:\Users\phyllo\Documents\Maimon\ephys\data_analysis_results\data_for_export\all_call_spike_data\';
-    output_folder = [];
-elseif nargin<4
-    output_folder = [];
+function [mdlResults, params, cell_ks, input] = batch_all_call_coherence(vdCall,varargin)
+
+output_folder = [];
+fixed_ridge_ks = [];
+cell_ks = [vdCall.responsive_cells_by_bat{[1 2 4]}];
+dataDir = 'C:\Users\phyllo\Documents\Maimon\ephys\data_analysis_results\data_for_export\all_call_spike_data\';
+    
+if nargin  == 2
+    cell_ks = varargin{1};
+elseif nargin == 3
+    cell_ks = varargin{1};
+    dataDir = varargin{2};
+elseif nargin == 4
+    cell_ks = varargin{1};
+    dataDir = varargin{2};
+    output_folder = varargin{3};
+elseif nargin == 5
+    cell_ks = varargin{1};
+    dataDir = varargin{2};
+    output_folder = varargin{3};
+    fixed_ridge_ks = varargin{4};
 end
 nCells = length(cell_ks);
-input = {'call_on','call_ps_pca','bioacoustics'};
+input = {'call_on','call_ps_pca_ortho','bioacoustics_ortho'};
 mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
 permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
 nPermutes = size(permute_idxs,1);
@@ -24,7 +35,8 @@ for k = 1:nCells
     cell_k = cell_ks(k);
     batParams{k} = struct('batNum',vdCall.batNum{cell_k},'cellInfo',vdCall.cellInfo{cell_k},...
         'call_echo',vdCall.call_echo,'baseDir',vdCall.baseDirs{1},'expDate',vdCall.expDay(cell_k),...
-        'lfp_channel_switch',[],'lfp_tt',[],'dataDir',dataDir,'expType','juvenile');
+        'lfp_channel_switch',[],'lfp_tt',[],'dataDir',dataDir,'expType','juvenile',...
+        'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
 for perm_k = 1:nPermutes
