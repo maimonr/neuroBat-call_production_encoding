@@ -26,7 +26,7 @@ spike_bin_size = 5;
 smoothing_span_size = 150;
 call_time_offset = 500;
 
-cvType = 'fixed_ridge_k_cv';
+cvType = 'nested_cv';
 banded_ridge_flag = true;
 
 audio_fs = 250e3;
@@ -442,14 +442,44 @@ switch params.neural_data_type
     
     case 'spikes'
         
-        fname = [batParams.batNum '_' batParams.cellInfo '.mat'];
+        switch batParams.expType
+            case 'juvenile'
         
-        s = load([batParams.dataDir fname],'timestamps');
-        timestamps = s.timestamps;
-        data = [];
-        neural_params.fs = 1e3;
-        neural_params.call_neural_common_reference = true;
-        
+                fname = fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']);
+                
+                s = load(fname,'timestamps');
+                timestamps = s.timestamps;
+                data = [];
+                neural_params.fs = 1e3;
+                neural_params.call_neural_common_reference = true;
+                
+            case 'adult'
+                
+                fname = fullfile(batParams.baseDir,'spike_data',[batParams.batNum '_' batParams.cellInfo '.csv']);
+                
+                try
+                    
+                    timestamps = csvread(fname);
+                    
+                catch err
+                    
+                    if strcmp(err.identifier,'MATLAB:textscan:EmptyFormatString')
+                        timestamps = [];
+                    else
+                        rethrow(err)
+                    end
+                    
+                end
+                
+                if size(timestamps,1) ~= 1
+                    timestamps = timestamps';
+                end
+                
+                data = [];
+                neural_params.fs = 1e3;
+                neural_params.call_neural_common_reference = true;
+                
+        end
     case 'lfp'
         
         switch batParams.expType
@@ -476,23 +506,8 @@ switch params.neural_data_type
                 call_neural_common_reference = true;
               
             case 'adult'
-                
-                subtract_baseline = false;
-                [~, batNum, expDate] = get_data_dir(batParams,params);
-                
-                lfp_data_dir = 'E:\ephys\adult_recording\lfp_data\';
-                lfp_data_fname = [lfp_data_dir batNum '_' expDate '_LFP.mat'];
-                
-                s = load(lfp_data_fname,'timestamps_ms','voltage_traces',...
-                    'indices_active_channels','sampling_freq'); 
-                
-                timestamps = 1e-3*s.timestamps_ms;
-                lfpData = s.voltage_traces;
-                active_channels = s.indices_active_channels;
-                baseline_lfp_samples = [];
-                fs = s.sampling_freq;
-                orig_lfp_fs = [];
-                call_neural_common_reference = false;
+                disp('LFP not yet implemented for adult data')
+                keyboard
                 
         end
         
@@ -603,7 +618,7 @@ function cut_call_data = get_cut_call_data(batParams,params)
 switch batParams.expType
     case 'juvenile'
         
-        s = load([batParams.dataDir batParams.batNum '_' batParams.cellInfo '.mat'],'cut_call_data');
+        s = load(fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']),'cut_call_data');
         cut_call_data = s.cut_call_data;
         if all(isnan([cut_call_data.corrected_callpos]))
             cut_call_data = [];
@@ -611,58 +626,19 @@ switch batParams.expType
         end
         
     case 'adult'
-        [baseDir, batNum, expDate] = get_data_dir(batParams,params);
         
-        audioDir = [baseDir 'neurologger_recording' expDate '\audio\ch1\'];
+        exp_day_str = datestr(batParams.expDate,'yyyymmdd');
+        cut_call_fname = fullfile(batParams.baseDir,'call_data',[exp_day_str '_cut_call_data.mat']);
         
-        try
-            s = load([audioDir 'cut_call_data.mat']);
-        catch
-           cut_call_data = []; 
-           return
-        end
+        s = load(cut_call_fname,'cut_call_data');
         cut_call_data = s.cut_call_data;
         
-        if isempty(cut_call_data)
+        cut_call_data = cut_call_data(strcmp({cut_call_data.batNum},batParams.batNum));
+        
+        if all(isnan([cut_call_data.corrected_callpos]))
             cut_call_data = [];
             return
         end
-        
-        cut_call_data = cut_call_data(~[cut_call_data.noise]);
-        
-        batIdx = unique(cellfun(@(call) find(cellfun(@(bNum) strcmp(bNum,batParams.batNum),call)),{cut_call_data.batNum}));
-        bat_pair_nums = unique([cut_call_data.batNum]);
-        
-        if length(batIdx) == 1
-            callpos = horzcat(cut_call_data.corrected_callpos);
-            callpos = callpos(batIdx,:);
-            [cut_call_data.corrected_callpos] = deal(callpos{:});
-        else
-            keyboard
-        end
-        
-        call_info_loaded = false;
-        
-        for b_pair = 1:length(bat_pair_nums)
-            call_info_fname = [audioDir 'call_info_' bat_pair_nums{b_pair} '_' batParams.call_echo '_' expDate '.mat'];
-            if exist(call_info_fname,'file')
-                s = load(call_info_fname);
-                call_info = s.call_info;
-                call_info_loaded = true;
-            end
-        end
-        
-        if ~call_info_loaded
-            cut_call_data = [];
-            return
-        end
-            
-        
-        assert(all([cut_call_data.uniqueID] == [call_info.callID]));
-        
-        bat_calls = cellfun(@(x) contains(x,batNum),{call_info.behaviors});
-        cut_call_data = cut_call_data(bat_calls);
-        
         
 end
 

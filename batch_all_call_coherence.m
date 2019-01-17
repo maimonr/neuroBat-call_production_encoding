@@ -35,13 +35,13 @@ for k = 1:nCells
     cell_k = cell_ks(k);
     batParams{k} = struct('batNum',vdCall.batNum{cell_k},'cellInfo',vdCall.cellInfo{cell_k},...
         'call_echo',vdCall.call_echo,'baseDir',vdCall.baseDirs{1},'expDate',vdCall.expDay(cell_k),...
-        'lfp_channel_switch',[],'lfp_tt',[],'dataDir',dataDir,'expType','juvenile',...
+        'lfp_channel_switch',[],'lfp_tt',[],'dataDir',dataDir,'expType','adult',...
         'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
 for perm_k = 1:nPermutes
     mdlParams.permuteInput = permute_idxs(perm_k,:);
-    parfor k = 1:nCells
+    for k = 1:nCells
         try
             [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},input,'ridge',mdlParams);
         catch err
