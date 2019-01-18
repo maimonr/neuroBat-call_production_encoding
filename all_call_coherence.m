@@ -697,7 +697,11 @@ while call_k <= length(cut_call_data)
         included_call_ks{k} = [included_call_ks{k} call_k];
         call_k = call_k + 1;
     end
-    all_call_timestamps{k} = included_call_times{k}(1)-params.call_time_offset:included_call_times{k}(end)+params.call_time_offset-1;
+    
+    last_call_length = round(abs(diff(cut_call_data(included_call_ks{k}(end)).corrected_callpos)));
+    call_start_idx = included_call_times{k}(1)-params.call_time_offset;
+    call_end_idx = included_call_times{k}(end)+last_call_length+params.call_time_offset-1;
+    all_call_timestamps{k} = call_start_idx:call_end_idx;
     k = k + 1;
 end
 call_ts = [all_call_timestamps{:}];
