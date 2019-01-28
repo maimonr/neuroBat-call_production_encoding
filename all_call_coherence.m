@@ -988,7 +988,7 @@ call_ps = 10*log10([all_call_ps{:}]+eps);
 
 switch pcaFlag
     case 'pca'
-        [~,score] = pca(call_ps');
+        [~,score] = pca(call_ps','Economy',false);
         
         call_ps_feature = score(:,params.pc_idx)';
         
@@ -1001,7 +1001,7 @@ switch pcaFlag
         call_on = call_ps(1,:)~=mode(call_ps(1,:));
         call_ps_ortho(:,call_on) = call_ps(:,call_on) - mean(call_ps(:,call_on),2);
         call_on = call_ps(1,:)~=mode(call_ps(1,:));
-        coef = pca(call_ps_ortho(:,call_on)');
+        coef = pca(call_ps_ortho(:,call_on)','Economy',false);
         score = coef*call_ps_ortho;
         
         call_ps_feature = score(params.pc_idx,:);

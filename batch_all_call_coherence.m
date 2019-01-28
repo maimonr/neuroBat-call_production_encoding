@@ -1,27 +1,11 @@
-function [mdlResults, params, cell_ks, input] = batch_all_call_coherence(vdCall,varargin)
+function [mdlResults, params, input] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
-output_folder = [];
-fixed_ridge_ks = [];
-cell_ks = [vdCall.responsive_cells_by_bat{[1 2 4]}];
-dataDir = 'C:\Users\phyllo\Documents\Maimon\ephys\data_analysis_results\data_for_export\all_call_spike_data\';
-    
-if nargin  == 2
-    cell_ks = varargin{1};
-elseif nargin == 3
-    cell_ks = varargin{1};
-    dataDir = varargin{2};
-elseif nargin == 4
-    cell_ks = varargin{1};
-    dataDir = varargin{2};
-    output_folder = varargin{3};
-elseif nargin == 5
-    cell_ks = varargin{1};
-    dataDir = varargin{2};
-    output_folder = varargin{3};
-    fixed_ridge_ks = varargin{4};
-end
+pnames = {'output_folder', 'fixed_ridge_ks','dataDir','chunkSize'};
+dflts  = {[],nan(length(cell_ks),1),[],NaN};
+[output_folder,fixed_ridge_ks,dataDir,chunkSize] = internal.stats.parseArgs(pnames,dflts,varargin{:});
+
 nCells = length(cell_ks);
-input = {'call_on','call_ps_pca_ortho','bioacoustics_ortho'};
+input = {'call_on','call_ps_pca','bioacoustics'};
 mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
 permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
 nPermutes = size(permute_idxs,1);
@@ -39,28 +23,41 @@ for k = 1:nCells
         'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
+if isnan(chunkSize)
+    nChunk = 1;
+    cell_chunks = 1:nCells;
+else
+    nChunk = ceil(nCells/chunkSize);
+    cell_chunks = 1:(nCells+rem(nCells/nChunk));
+    cell_chunks = reshape(cell_chunks,[],chunkSize);
+    cell_chunks(~ismember(cell_chunks,1:nCells)) = NaN;
+end
+
 for perm_k = 1:nPermutes
     mdlParams.permuteInput = permute_idxs(perm_k,:);
-    for k = 1:nCells
-        try
-            [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},input,'ridge',mdlParams);
-        catch err
-            disp(err)
-            [mdlResults{perm_k,k}, params{perm_k,k}] = deal(NaN);
-        end        
+    for chunk_k = 1:nChunk
+        chunk_cell_ks = cell_chunks(chunk_k,:);
+        chunk_cell_ks = chunk_cell_ks(~isnan(chunk_cell_ks));
+        parfor k = chunk_cell_ks
+            try
+                [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},input,'ridge',mdlParams);
+            catch err
+                disp(err)
+                [mdlResults{perm_k,k}, params{perm_k,k}] = deal(NaN);
+            end
+        end
+        progress = 100*(perm_k/nPermutes);
+        fprintf('%d %% of cells processed\n',round(progress));
+        toc(t);
     end
-    progress = 100*(perm_k/nPermutes);
-    fprintf('%d %% of cells processed\n',round(progress));
-    toc(t);
+    
+    if ~isempty(output_folder)
+        try
+            lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
+            save([output_folder 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
+        catch err
+            keyboard
+        end
+    end
 end
-
-if ~isempty(output_folder)
-   try
-       lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
-       save([output_folder 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
-   catch err
-       keyboard
-   end
-end
-
 end
