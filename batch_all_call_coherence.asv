@@ -1,8 +1,8 @@
 function [mdlResults, params, input] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
-pnames = {'outDir', 'baseDir', 'dataDir','fixed_ridge_ks','chunkSize'};
-dflts  = {[],[],[],nan(length(cell_ks),1),NaN};
-[outDir,baseDir,dataDir,fixed_ridge_ks,chunkSize] = internal.stats.parseArgs(pnames,dflts,varargin{:});
+pnames = {'output_folder', 'fixed_ridge_ks','dataDir','chunkSize'};
+dflts  = {[],nan(length(cell_ks),1),[],NaN};
+[output_folder,fixed_ridge_ks,dataDir,chunkSize] = internal.stats.parseArgs(pnames,dflts,varargin{:});
 
 nCells = length(cell_ks);
 input = {'call_on','call_ps_pca','bioacoustics'};
@@ -17,14 +17,10 @@ batParams = cell(1,nCells);
 
 for k = 1:nCells
     cell_k = cell_ks(k);
-    b = strcmp(vdCall.batNums,vdCall.batNum{cell_k});
-    if isempty(baseDir)
-        baseDir = vdCall.baseDirs{b};
-    end
     batParams{k} = struct('batNum',vdCall.batNum{cell_k},'cellInfo',vdCall.cellInfo{cell_k},...
-        'baseDir',baseDir,'expDate',vdCall.expDay(cell_k),'lfp_tt',[],...
+        'baseDir',vdCall.baseDirs{1},'expDate',vdCall.expDay(cell_k),'lfp_tt',[]...
         'lfp_channel_switch',[],'dataDir',dataDir,'expType',vdCall.expType,...
-        'callType',vdCall.callType,'boxNum',vdCall.boxNums{b},'band_ridge_k',fixed_ridge_ks(k,:));
+        'callType',vdCall.callType,'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
 if isnan(chunkSize)
@@ -55,10 +51,10 @@ for perm_k = 1:nPermutes
         toc(t);
     end
     
-    if ~isempty(outDir)
+    if ~isempty(output_folder)
         try
             lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
-            save([outDir 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
+            save([output_folder 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
         catch err
             keyboard
         end

@@ -718,6 +718,7 @@ switch input
 end
 
 end
+
 function [features,featureNames] = calculate_bioacoustics(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params,varargin)
 
 featureNames = params.bioacoustic_feature_names;
@@ -795,6 +796,7 @@ if orthoFlag
 end
 
 end
+
 function allFeats = getCallFeatures(callWF,params)
 
 L = length(callWF);
@@ -906,6 +908,7 @@ F0 = smoothdata(F0,2);
 ap = smoothdata(ap,2);
 
 end
+
 function call_ps_feature = calculate_specs(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params,varargin)
 
 if ~isempty(varargin)
@@ -963,4 +966,32 @@ switch pcaFlag
             call_ps_feature(f_k,:) = nanmean(call_ps(f_bounds_idx(f_k,:),:),1);
         end
 end
+end
+
+function [baseDir, batNum, expDate, cellInfo] = get_data_dir(batParams,params)
+
+
+baseDir = batParams.baseDir;
+batNum = batParams.batNum;
+cellInfo = batParams.cellInfo;
+ 
+switch params.neural_data_type
+    
+    case 'spikes'
+       
+        tetrodeStr = 'TT';
+        expDate = cellInfo(1:strfind(cellInfo,tetrodeStr)-1);
+        
+    case 'lfp'
+        
+        batNum = batParams.batNum;
+        expDate = batParams.expDate;
+        
+        baseDir = batParams.baseDir;
+        
+        cellInfo = [];
+        
+end
+        
+        
 end
