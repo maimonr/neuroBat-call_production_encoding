@@ -90,7 +90,7 @@ if isnan(call_ts)
 end
 
 binning_idx = slidingWin(length(call_ts),params.smoothing_bin_size,0);
-call_wf = calculate_envelope(cut_call_data,all_call_timestamps,...
+call_wf = calculate_all_call_envelope(cut_call_data,all_call_timestamps,...
     included_call_times,included_call_ks,params);
 
 if nargout > 2
@@ -572,45 +572,6 @@ end
 
 end
 
-function neural_call_data = get_call_neural_data(timestamps,data,call_ts,binning_idx,params)
-
-switch params.neural_data_type
-    
-    case 'spikes'
-        
-        edges = 0:params.spike_bin_size:max(timestamps)+1;
-        interp_edges = 1:max(timestamps)+1;
-        bin_centers = movmean(edges,2);
-        bin_centers = bin_centers(2:end);
-        binned_spikes = histcounts(timestamps,edges)/(1e-3*params.spike_bin_size);
-        binned_spikes_interp = interp1(bin_centers,binned_spikes,interp_edges,[],'extrap');
-        assert(~any(isnan(binned_spikes_interp)));
-        call_spikes = binned_spikes_interp(call_ts);
-        neural_call_data = smoothdata(call_spikes,2,'gaussian',params.smoothing_span_size);
-        neural_call_data = mean(neural_call_data(binning_idx),2);
-        
-    case 'lfp'
-        
-        if params.neural_params.subtract_baseline
-            [S,f] = calculate_lfp_spectrogram(data(:,call_ts),params.neural_params.fs,params.neural_params.baseline_lfp_samples);
-        else
-            [S,f] = calculate_lfp_spectrogram(data(:,call_ts),params.neural_params.fs);
-        end
-        neural_call_data = squeeze(mean(mean(S(:,(f>params.neural_params.lfp_freq_band(1) & f<params.neural_params.lfp_freq_band(2)),:),2),3));
-        
-        if size(binning_idx,2) > 1
-            tmp_data = zeros(size(binning_idx,1),size(neural_call_data,2));
-            for k = 1:size(neural_call_data,2)
-                tmp = neural_call_data(:,k);
-                tmp_data(:,k) = mean(tmp(binning_idx),2);
-            end
-            neural_call_data = tmp_data;
-        end
-        neural_call_data = zscore(neural_call_data);
-end
-
-end
-
 function cut_call_data = get_cut_call_data(batParams,params)
 
 
@@ -940,25 +901,6 @@ end
 
 F0 = smoothdata(F0,2);
 ap = smoothdata(ap,2);
-
-end
-
-function call_wf = calculate_envelope(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params)
-
-all_call_wf = cell(1,length(all_call_timestamps));
-for k = 1:length(all_call_timestamps)
-    
-    all_call_wf{k} = zeros(1,length(all_call_timestamps{k}));
-    
-    for call_wf_k = 1:length(included_call_ks{k})
-        cutEnv = envelope(cut_call_data(included_call_ks{k}(call_wf_k)).cut',params.audio_fs*params.envelope_window_length);
-        cutEnv = downsample(cutEnv,params.envelope_ds_factor);
-        idx = (params.call_time_offset + included_call_times{k}(call_wf_k) - included_call_times{k}(1));
-        all_call_wf{k}(idx:idx+length(cutEnv)-1) = cutEnv;
-    end
-end
-
-call_wf = [all_call_wf{:}];
 
 end
 
