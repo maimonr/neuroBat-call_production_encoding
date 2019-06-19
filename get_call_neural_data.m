@@ -4,8 +4,8 @@ switch params.neural_data_type
     
     case 'spikes'
         
-        edges = 0:params.spike_bin_size:max(timestamps)+1;
-        interp_edges = 1:max(timestamps)+1;
+        edges = min(timestamps):params.spike_bin_size:max(timestamps)+1;
+        interp_edges = min(timestamps):max(timestamps)+1;
         bin_centers = movmean(edges,2);
         bin_centers = bin_centers(2:end);
         binned_spikes = histcounts(timestamps,edges)/(1e-3*params.spike_bin_size);

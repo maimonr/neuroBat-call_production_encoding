@@ -1,13 +1,14 @@
-function [mdlResults, params, input] = batch_all_call_coherence(vdCall,cell_ks,varargin)
+function [mdlResults, params, inputs] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
 pnames = {'outDir', 'baseDir', 'dataDir','fixed_ridge_ks','chunkSize'};
 dflts  = {[],[],[],nan(length(cell_ks),1),NaN};
 [outDir,baseDir,dataDir,fixed_ridge_ks,chunkSize] = internal.stats.parseArgs(pnames,dflts,varargin{:});
 
 nCells = length(cell_ks);
-input = {'call_on','call_ps_pca','bioacoustics'};
+inputs = {'call_on','call_ps_pca','bioacoustics'};
 mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
-permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
+% permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
+permute_idxs = zeros(1,3);
 nPermutes = size(permute_idxs,1);
 
 t = tic;
@@ -32,8 +33,8 @@ if isnan(chunkSize)
     cell_chunks = 1:nCells;
 else
     nChunk = ceil(nCells/chunkSize);
-    cell_chunks = 1:(nCells+rem(nCells/nChunk));
-    cell_chunks = reshape(cell_chunks,[],chunkSize);
+    cell_chunks = 1:(nCells + chunkSize - rem(nCells,chunkSize));
+    cell_chunks = reshape(cell_chunks,chunkSize,[])';
     cell_chunks(~ismember(cell_chunks,1:nCells)) = NaN;
 end
 
@@ -42,9 +43,9 @@ for perm_k = 1:nPermutes
     for chunk_k = 1:nChunk
         chunk_cell_ks = cell_chunks(chunk_k,:);
         chunk_cell_ks = chunk_cell_ks(~isnan(chunk_cell_ks));
-        parfor k = chunk_cell_ks
+        for k = chunk_cell_ks
             try
-                [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},input,'ridge',mdlParams);
+                [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},inputs,'ridge',mdlParams);
             catch err
                 disp(err)
                 [mdlResults{perm_k,k}, params{perm_k,k}] = deal(NaN);
@@ -53,14 +54,14 @@ for perm_k = 1:nPermutes
         progress = 100*(perm_k/nPermutes);
         fprintf('%d %% of cells processed\n',round(progress));
         toc(t);
-    end
-    
-    if ~isempty(outDir)
-        try
-            lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
-            save([outDir 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
-        catch err
-            keyboard
+        
+        if ~isempty(outDir)
+            try
+                lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{inputs},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
+                save([outDir 'lmResults_' datestr(date,'mmddyyyy') '.mat'],'-v7.3','-struct','lmResults');
+            catch err
+                keyboard
+            end
         end
     end
 end

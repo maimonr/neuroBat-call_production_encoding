@@ -2,8 +2,8 @@ function [mdlResults, params, coherence_results, features] = all_call_coherence(
 
 add_yin_path = false;
 if contains(getenv('HOSTNAME'),'ln') || contains(getenv('HOSTNAME'),'.savio') || contains(getenv('HOSTNAME'),'.brc')%savio Cluster
-   savioFlag = true;
-   addpath(genpath('/global/home/users/maimon/code/Myfunctions')); 
+    savioFlag = true;
+    addpath(genpath('/global/home/users/maimon/code/Myfunctions'));
 else
     savioFlag = false;
     if ~exist('yin','file')
@@ -15,16 +15,16 @@ end
 
 if nargin < 4
     mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',...
-    false,'onlyNeuralData',false,'permuteInput',[]);
+        false,'onlyNeuralData',false,'permuteInput',[]);
 end
 neural_data_type = 'spikes';
 minCalls = 10;
-nFilt = 200;
+nFilt = 500;
 offset = nFilt/2;
-smoothing_bin_size = 2;
+smoothing_bin_size = 5;
 spike_bin_size = 5;
-smoothing_span_size = 150;
-call_time_offset = 500;
+smoothing_span_size = 100;
+call_time_offset = 2e3;
 
 cvType = 'nested_cv';
 banded_ridge_flag = true;
@@ -39,6 +39,8 @@ n_freq_bins = 6;
 f_bounds = logspace(2,log10(max_f),n_freq_bins+1);
 
 yin_wsize = round(winSize*audio_fs);
+
+gpuFlag = true;
 
 featureNames = {'f0','wEnt','RMS'};
 
@@ -80,8 +82,9 @@ params.neural_params = neural_params;
     included_call_ks] = get_call_timestamps(batParams,cut_call_data,params);
 
 if ~neural_params.call_neural_common_reference
-    call_ts = call_ts - timestamps(1);
-    timestamps = timestamps - timestamps(1);
+    min_ts = min([timestamps call_ts]) - 1;
+    call_ts = round(call_ts - min_ts);
+    timestamps = timestamps - min_ts;
 end
 
 if isnan(call_ts)
@@ -191,115 +194,119 @@ if mdlParams.onlyStandardize
 end
 
 if nargout > 3
-    features = design_mat; 
+    features = design_mat;
 end
 
 %%
 
 switch mdlType
     case 'ridge'
-            ridgeKs = logspace(3,7,5);%2.^(0.5:1:8);
-            nCV = 5;
-            nRidgeK = length(ridgeKs);
-            nObservations = length(neural_call_data);
-            mseCV = nan(1,nCV);
-            R2CV = nan(1,nCV);
-            rhoCV = nan(1,nCV);
+        ridgeKs = logspace(3,7,5);%2.^(0.5:1:8);
+        nCV = 5;
+        nRidgeK = length(ridgeKs);
+        nObservations = length(neural_call_data);
+        mseCV = nan(1,nCV);
+        R2CV = nan(1,nCV);
+        rhoCV = nan(1,nCV);
+        
+        bCV = nan(p+1,nCV);
+        b_scaled_CV = nan(p,nCV);
+        
+        logLikelihoodCV = nan(1,nCV);
+        
+        tic;
+        switch params.cvType
             
-            bCV = nan(p+1,nCV);
-            b_scaled_CV = nan(p,nCV);
-            
-            logLikelihoodCV = nan(1,nCV);
-
-            tic;
-            switch params.cvType
+            case 'nested_cv'
+                iteration_k = 1;
+                n_nest_cv = 5;
+                mseRidge = cell(1,n_nest_cv);
+                mseRidge_nested = cell(1,n_nest_cv);
+                nested_cv_idx = get_cv_idx(nObservations,nCV);
+                for nest_cv_k = 1:n_nest_cv
+                    nested_testIdx = nested_cv_idx(1,nest_cv_k):nested_cv_idx(2,nest_cv_k)-1;
+                    
+                    nested_trainIdx = setdiff(1:nObservations,nested_testIdx);
+                    nested_nObservations = length(nested_trainIdx);
+                    cv_idx = get_cv_idx(nested_nObservations,nCV);
+                    nested_design_mat = design_mat(nested_trainIdx,:);
+                    
+                    nested_yTrain = neural_call_data(nested_trainIdx);
+                    mseRidge_cv = cell(1,nCV);
+                    for cv_k = 1:nCV
+                        testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
+                        
+                        trainIdx = setdiff(1:nested_nObservations,testIdx);
+                        Xtest = nested_design_mat(testIdx,:);
+                        Xtrain = nested_design_mat(trainIdx,:);
+                        yTrain = nested_yTrain(trainIdx);
+                        yTest = nested_yTrain(testIdx);
+                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(Xtrain,yTrain);
+                        [~,~,mseRidge_cv{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain,gpuFlag);
+                    end
+                    t = toc;
+                    fprintf('%d s elapsed, %d iterations\n',t,iteration_k);
+                    iteration_k = iteration_k + 1;
+                    
+                    nested_yTest = neural_call_data(nested_testIdx);
+                    nested_Xtest = design_mat(nested_testIdx,:);
+                    nested_Xtrain = design_mat(nested_trainIdx,:);
+                    
+                    mseRidge_nested{nest_cv_k} = cat(nInput+1,mseRidge_cv{:});
+                    mseRidge{nest_cv_k} = mean(mseRidge_nested{nest_cv_k},nInput+1);
+                    [~,idx] = min(mseRidge{nest_cv_k}(:));
+                    band_ridge_idx = cell(1,nInput);
+                    [band_ridge_idx{1:nInput}] = ind2sub(repmat(nRidgeK,1,nInput),idx);
+                    band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
+                    lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
+                    
+                    [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(nested_Xtrain,nested_yTrain);
+                    [bCV(:,nest_cv_k),b_scaled_CV(:,nest_cv_k)] = fit_ridge_mdl(ZTZ,ZTy,nested_yTrain,muX_train,sigmaX_train,lambda_mat);
+                    [mseCV(nest_cv_k),R2CV(nest_cv_k),rhoCV(nest_cv_k),logLikelihoodCV(nest_cv_k)] = assess_ridge_mdl_fit(bCV(:,nest_cv_k),nested_Xtest,nested_yTest);
+                end
                 
-                case 'nested_cv'
-                    iteration_k = 1;
-                    n_nest_cv = 5;
-                    mseRidge = cell(1,n_nest_cv);
-                    mseRidge_nested = cell(1,n_nest_cv);
-                    nested_cv_idx = get_cv_idx(nObservations,nCV);
-                    for nest_cv_k = 1:n_nest_cv
-                        nested_testIdx = nested_cv_idx(1,nest_cv_k):nested_cv_idx(2,nest_cv_k)-1;
-                            
-                        nested_trainIdx = setdiff(1:nObservations,nested_testIdx);
-                        nested_nObservations = length(nested_trainIdx);
-                        cv_idx = get_cv_idx(nested_nObservations,nCV);
-                        nested_design_mat = design_mat(nested_trainIdx,:);
-                        
-                        nested_yTrain = neural_call_data(nested_trainIdx);
-                        mseRidge_cv = cell(1,nCV);
-                        for cv_k = 1:nCV
-                            testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
-                            
-                            trainIdx = setdiff(1:nested_nObservations,testIdx);
-                            Xtest = nested_design_mat(testIdx,:);
-                            yTrain = nested_yTrain(trainIdx);
-                            yTest = nested_yTrain(testIdx);
-                            [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(nested_design_mat,trainIdx,yTrain);
-                            [~,~,mseRidge_cv{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
-                        end
-                        t = toc;
-                        fprintf('%d s elapsed, %d iterations\n',t,iteration_k);
-                        iteration_k = iteration_k + 1;
-                        
-                        nested_yTest = neural_call_data(nested_testIdx);
-                        nested_Xtest = design_mat(nested_testIdx,:);
-                        
-                        mseRidge_nested{nest_cv_k} = cat(nInput+1,mseRidge_cv{:});
-                        mseRidge{nest_cv_k} = mean(mseRidge_nested{nest_cv_k},nInput+1);
-                        [~,idx] = min(mseRidge{nest_cv_k}(:));
-                        band_ridge_idx = cell(1,nInput);
-                        [band_ridge_idx{1:nInput}] = ind2sub(repmat(nRidgeK,1,nInput),idx);
-                        band_ridge_ks = ridgeKs([band_ridge_idx{:}]);
-                        lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
-                        
-                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,nested_trainIdx,nested_yTrain);
-                        [bCV(:,nest_cv_k),b_scaled_CV(:,nest_cv_k)] = fit_ridge_mdl(ZTZ,ZTy,nested_yTrain,muX_train,sigmaX_train,lambda_mat);
-                        [mseCV(nest_cv_k),R2CV(nest_cv_k),rhoCV(nest_cv_k),logLikelihoodCV(nest_cv_k)] = assess_ridge_mdl_fit(bCV(:,nest_cv_k),nested_Xtest,nested_yTest);
-                    end
+            case 'crossValidate'
+                mseRidge = cell(1,nCV);
+                mseRidge_nested = [];
+                cv_idx = get_cv_idx(nObservations,nCV);
+                for cv_k = 1:nCV
+                    testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
                     
-                case 'crossValidate'
-                    mseRidge = cell(1,nCV);
-                    mseRidge_nested = [];
-                    cv_idx = get_cv_idx(nObservations,nCV);
-                    for cv_k = 1:nCV
-                        testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
-                        
-                        trainIdx = setdiff(1:nObservations,testIdx);
-                        Xtest = design_mat(testIdx,:);
-                        yTrain = neural_call_data(trainIdx);
-                        yTest = neural_call_data(testIdx);
-                        
-                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,trainIdx,yTrain);
-                        [~,~,mseRidge{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain);
-                        
-                    end
+                    trainIdx = setdiff(1:nObservations,testIdx);
+                    Xtest = design_mat(testIdx,:);
+                    Xtrain = design_mat(trainIdx,:);
+                    yTrain = neural_call_data(trainIdx);
+                    yTest = neural_call_data(testIdx);
                     
-                case 'fixed_ridge_k_cv'
-                    mseRidge = cell(1,nCV);
-                    mseRidge_nested = [];
-                    cv_idx = get_cv_idx(nObservations,nCV);
-                    for cv_k = 1:nCV
-                        testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
-                        
-                        trainIdx = setdiff(1:nObservations,testIdx);
-                        Xtest = design_mat(testIdx,:);
-                        yTrain = neural_call_data(trainIdx);
-                        yTest = neural_call_data(testIdx);
-                        
-                        band_ridge_ks = batParams.band_ridge_k;
-                        
-                        lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
-                        
-                        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,trainIdx,yTrain);
-                        b = fit_ridge_mdl(ZTZ,ZTy,neural_call_data,muX_train,sigmaX_train,lambda_mat);
-                        [mseCV(cv_k),R2CV(cv_k),rhoCV(cv_k),logLikelihoodCV(cv_k)] = assess_ridge_mdl_fit(b,Xtest,yTest);
-                        
-                    end
+                    [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(Xtrain,yTrain);
+                    [~,~,mseRidge{cv_k}] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain,gpuFlag);
                     
-            end
+                end
+                
+            case 'fixed_ridge_k_cv'
+                mseRidge = cell(1,nCV);
+                mseRidge_nested = [];
+                cv_idx = get_cv_idx(nObservations,nCV);
+                for cv_k = 1:nCV
+                    testIdx = cv_idx(1,cv_k):cv_idx(2,cv_k)-1;
+                    
+                    trainIdx = setdiff(1:nObservations,testIdx);
+                    Xtest = design_mat(testIdx,:);
+                    Xtrain = design_mat(trainIdx,:);
+                    yTrain = neural_call_data(trainIdx);
+                    yTest = neural_call_data(testIdx);
+                    
+                    band_ridge_ks = batParams.band_ridge_k;
+                    
+                    lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
+                    
+                    [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(Xtrain,yTrain);
+                    b = fit_ridge_mdl(ZTZ,ZTy,neural_call_data,muX_train,sigmaX_train,lambda_mat);
+                    [mseCV(cv_k),R2CV(cv_k),rhoCV(cv_k),logLikelihoodCV(cv_k)] = assess_ridge_mdl_fit(b,Xtest,yTest);
+                    
+                end
+                
+        end
         
         t = toc;
         %%
@@ -318,13 +325,13 @@ switch mdlType
         end
         lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
         
-        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,1:n,neural_call_data);
+        [ZTZ,ZTy,muX_train,sigmaX_train] = get_ridge_mdl_inputs(design_mat,neural_call_data);
         [b,b_scaled] = fit_ridge_mdl(ZTZ,ZTy,neural_call_data,muX_train,sigmaX_train,lambda_mat);
         [mse,R2,rho,logLikelihood,predSpikes] = assess_ridge_mdl_fit(b,design_mat,neural_call_data);
         [~, ~, sigmaX] = zscore(design_mat);
         % Using frequentist formulation of var see Cule et al. 2011
         % https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3228544/
-        % test statistic: T(k) = b(k)/se(b(k)) 
+        % test statistic: T(k) = b(k)/se(b(k))
         % Using variable names: T(k) = b(k)/posterior_std(k)
         % T ~ N(0,1) with large n
         nu = n - p;
@@ -362,15 +369,21 @@ idx = cv_idx_reshape(:,2:end);
 
 end
 
-function [ZTZ,ZTy,muX,sigmaX] = get_ridge_mdl_inputs(design_mat,trainIdx,y)
+function [ZTZ,ZTy,muX,sigmaX] = get_ridge_mdl_inputs(design_mat,y)
 
-[Z, muX, sigmaX] = zscore(design_mat(trainIdx,:));
+[Z, muX, sigmaX] = zscore(design_mat);
 ZTZ = Z'*Z;
 ZTy = (Z'*y);
 
 end
 
-function [R2,rho,mse,logLikelihood] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,yTest,yTrain)
+function [R2,rho,mse,logLikelihood] = search_ridge_lambda(ridgeKs,pred_idxs,ZTZ,ZTy,sigmaX_train,muX_train,Xtest,Ytest,Ytrain,varargin)
+
+if ~isempty(varargin)
+    gpuFlag = varargin{1};
+else
+    gpuFlag = false;
+end
 
 nInput = length(pred_idxs);
 nRidgeK = length(ridgeKs);
@@ -379,29 +392,40 @@ output_size = repmat(nRidgeK,1,nInput);
 if numel(output_size) == 1
     output_size = [1 output_size];
 end
-mse = nan(output_size);
-R2 = nan(output_size);
-rho = nan(output_size);
-logLikelihood = nan(output_size);
+
 nIteration = prod(output_size(:));
 
+if gpuFlag
+    ridgeKs = gpuArray(single(ridgeKs));
+    ZTZ = gpuArray(single(ZTZ));
+    Ytrain = gpuArray(single(Ytrain));
+    Xtest = gpuArray(single(Xtest));
+    Ytest = gpuArray(single(Ytest));
+    ZTy = gpuArray(single(ZTy));
+end
+
+[mse,R2,rho,logLikelihood] = deal(nan(output_size,class(ZTy)));
 [ridgeKMat{1:nInput}] = ndgrid(ridgeKs);
 
-for k = 1:nIteration
+parfor k = 1:nIteration
     
     band_ridge_ks = cellfun(@(x) x(k),ridgeKMat);
     lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
+    
+    b = fit_ridge_mdl(ZTZ,ZTy,Ytrain,muX_train,sigmaX_train,lambda_mat);
+    [mse(k),R2(k),rho(k),logLikelihood(k)] = assess_ridge_mdl_fit(b,Xtest,Ytest);
+    
+end
 
-    b = fit_ridge_mdl(ZTZ,ZTy,yTrain,muX_train,sigmaX_train,lambda_mat);
-    [mse(k),R2(k),rho(k),logLikelihood(k)] = assess_ridge_mdl_fit(b,Xtest,yTest);
-
+if gpuFlag
+    [mse,R2,rho,logLikelihood] = gather(mse,R2,rho,logLikelihood);
 end
 
 end
 
 function lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p)
 
-lambda_vec = ones(1,p);
+lambda_vec = ones(1,p,class(band_ridge_ks));
 
 for lambda_band_k = 1:nInput
     lambda_vec(pred_idxs{lambda_band_k}) = band_ridge_ks(lambda_band_k);
@@ -443,41 +467,41 @@ switch params.neural_data_type
     case 'spikes'
         
         if strcmp(batParams.expType,'juvenile')
-        
-                fname = fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']);
-                
-                s = load(fname,'timestamps');
-                timestamps = s.timestamps;
-                data = [];
-                neural_params.fs = 1e3;
-                neural_params.call_neural_common_reference = true;
-                
+            
+            fname = fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']);
+            
+            s = load(fname,'timestamps');
+            timestamps = s.timestamps;
+            data = [];
+            neural_params.fs = 1e3;
+            neural_params.call_neural_common_reference = true;
+            
         elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
+            
+            fname = fullfile(batParams.baseDir,'spike_data',[batParams.batNum '_' batParams.cellInfo '.csv']);
+            
+            try
                 
-                fname = fullfile(batParams.baseDir,'spike_data',[batParams.batNum '_' batParams.cellInfo '.csv']);
+                timestamps = csvread(fname);
                 
-                try
-                    
-                    timestamps = csvread(fname);
-                    
-                catch err
-                    
-                    if strcmp(err.identifier,'MATLAB:textscan:EmptyFormatString')
-                        timestamps = [];
-                    else
-                        rethrow(err)
-                    end
-                    
+            catch err
+                
+                if strcmp(err.identifier,'MATLAB:textscan:EmptyFormatString')
+                    timestamps = [];
+                else
+                    rethrow(err)
                 end
                 
-                if size(timestamps,1) ~= 1
-                    timestamps = timestamps';
-                end
-                
-                data = [];
-                neural_params.fs = 1e3;
-                neural_params.call_neural_common_reference = true;
-                
+            end
+            
+            if size(timestamps,1) ~= 1
+                timestamps = timestamps';
+            end
+            
+            data = [];
+            neural_params.fs = 1e3;
+            neural_params.call_neural_common_reference = false;
+            
         end
     case 'lfp'
         
@@ -502,7 +526,7 @@ switch params.neural_data_type
                 fs = s.fs;
                 orig_lfp_fs = s.orig_lfp_fs;
                 call_neural_common_reference = true;
-              
+                
             case 'adult'
                 disp('LFP not yet implemented for adult data')
                 keyboard
@@ -533,7 +557,7 @@ switch params.neural_data_type
         
         lfpData = lfpData(ch_idx,:);
         
-        if fs < 1e3        
+        if fs < 1e3
             upsample_scale = ceil(1e3/fs);
             timestamps_orig = timestamps;
             timestamps = upsample(timestamps,upsample_scale);
@@ -541,7 +565,7 @@ switch params.neural_data_type
             timestamps = fillmissing(timestamps,'linear');
             lfp_data_interp = zeros(sum(ch_idx),length(timestamps));
             for k = 1:sum(ch_idx)
-               lfp_data_interp(k,:) = interp1(timestamps_orig,lfpData(k,:),timestamps); 
+                lfp_data_interp(k,:) = interp1(timestamps_orig,lfpData(k,:),timestamps);
             end
             lfpData = lfp_data_interp;
         end
@@ -578,35 +602,35 @@ function cut_call_data = get_cut_call_data(batParams,params)
 
 
 if strcmp(batParams.expType,'juvenile')
-        
-        s = load(fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']),'cut_call_data');
-        cut_call_data = s.cut_call_data;
-        if all(isnan([cut_call_data.corrected_callpos]))
-            cut_call_data = [];
-            return
-        end
-        
-elseif any(strcmp(batParams.expType,'adult'))
-        
-        exp_day_str = datestr(batParams.expDate,'yyyymmdd');
-        
-        switch batParams.callType
-            case 'call'
-                cut_call_fname = fullfile(batParams.baseDir,'call_data',[exp_day_str '_cut_call_data.mat']);
-            case 'operant'
-                cut_call_fname = fullfile(batParams.baseDir,'call_data',[exp_date_str '_cut_call_data_operant_box_' batParams.boxNum '.mat']);
-        end
-        
-        s = load(cut_call_fname,'cut_call_data');
-        cut_call_data = s.cut_call_data;
-        
-        cut_call_data = cut_call_data(strcmp({cut_call_data.batNum},batParams.batNum));
-        
-        if all(isnan([cut_call_data.corrected_callpos]))
-            cut_call_data = [];
-            return
-        end
-        
+    
+    s = load(fullfile(batParams.dataDir,[batParams.batNum '_' batParams.cellInfo '.mat']),'cut_call_data');
+    cut_call_data = s.cut_call_data;
+    if all(isnan([cut_call_data.corrected_callpos]))
+        cut_call_data = [];
+        return
+    end
+    
+elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
+    
+    exp_day_str = datestr(batParams.expDate,'yyyymmdd');
+    
+    switch batParams.callType
+        case 'call'
+            cut_call_fname = fullfile(batParams.baseDir,'call_data',[exp_day_str '_cut_call_data.mat']);
+        case 'operant'
+            cut_call_fname = fullfile(batParams.baseDir,'call_data',[exp_day_str '_cut_call_data_operant_box_' batParams.boxNum '.mat']);
+    end
+    
+    s = load(cut_call_fname,'cut_call_data');
+    cut_call_data = s.cut_call_data;
+    
+    cut_call_data = cut_call_data(strcmp({cut_call_data.batNum},batParams.batNum));
+    
+    if all(isnan([cut_call_data.corrected_callpos]))
+        cut_call_data = [];
+        return
+    end
+    
 end
 
 if length(cut_call_data) < params.minCalls
@@ -619,25 +643,24 @@ end
 function [call_ts, cut_call_data, all_call_timestamps, included_call_times, included_call_ks] = get_call_timestamps(batParams,cut_call_data,params)
 
 if strcmp(batParams.expType,'juvenile')
-        
-        switch params.neural_data_type
-            case 'spikes'
-                s = load([batParams.dataDir batParams.batNum '_' batParams.cellInfo '.mat'],'stabilityBounds');
-                stabilityBounds = s.stabilityBounds;
-                
-            case 'lfp'
-                stabilityBounds = [-Inf Inf];
-        end
-        
+    
+    switch params.neural_data_type
+        case 'spikes'
+            s = load([batParams.dataDir batParams.batNum '_' batParams.cellInfo '.mat'],'stabilityBounds');
+            stabilityBounds = s.stabilityBounds;
+            
+        case 'lfp'
+            stabilityBounds = [-Inf Inf];
+    end
+    
 elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
-        stabilityBounds = [-Inf Inf];
-        
+    stabilityBounds = [-Inf Inf];
+    
 end
 
 callpos = vertcat(cut_call_data.corrected_callpos);
 
-usable_call_idx = callpos(:,1) - params.call_time_offset >=0 &...
-    callpos(:,1) - params.call_time_offset >= stabilityBounds(1) &...
+usable_call_idx = callpos(:,1) - params.call_time_offset >= stabilityBounds(1) &...
     callpos(:,2) + params.call_time_offset <= stabilityBounds(2) &...
     callpos(:,2) + params.call_time_offset <= params.max_t;
 
@@ -701,7 +724,7 @@ switch input
         
         pcaFlag = 'pca';
         feature = calculate_specs(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params,pcaFlag);
-
+        
     case 'call_ps_pca_ortho'
         
         pcaFlag = 'pca_ortho';
@@ -710,7 +733,7 @@ switch input
     case 'bioacoustics'
         
         feature = calculate_bioacoustics(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params);
-
+        
     case 'bioacoustics_ortho'
         
         orthoFlag = true;
@@ -813,7 +836,7 @@ if nFrame > 0
             energyEntropy(fr), RMS(fr)] = getFeatures(frame,params);
     end
     allFeats = vertcat(weinerEntropy, spectralEntropy, centroid, energyEntropy, RMS);
-else 
+else
     allFeats = zeros(1,nFeat);
 end
 
