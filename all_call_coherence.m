@@ -19,14 +19,18 @@ if nargin < 4
 end
 neural_data_type = 'spikes';
 minCalls = 10;
-nFilt = 500;
+nFilt = 250;
 offset = nFilt/2;
 smoothing_bin_size = 5;
 spike_bin_size = 5;
 smoothing_span_size = 100;
 call_time_offset = 2e3;
 
-cvType = 'nested_cv';
+if ~isnan(batParams.band_ridge_k)
+    cvType = 'fixed_ridge_k_cv';
+else
+    cvType = 'nested_cv';
+end
 banded_ridge_flag = true;
 
 audio_fs = 250e3;
@@ -626,8 +630,13 @@ elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
     s = load(cut_call_fname,'cut_call_data');
     cut_call_data = s.cut_call_data;
     
-    cut_call_data = cut_call_data(strcmp({cut_call_data.batNum},batParams.batNum));
-    
+    switch batParams.selectCalls
+        case 'selfCall'
+            idx = strcmp({cut_call_data.batNum},batParams.batNum);
+        case 'otherCall'
+            idx = ~strcmp({cut_call_data.batNum},batParams.batNum);
+    end
+    cut_call_data = cut_call_data(idx);
     if all(isnan([cut_call_data.corrected_callpos]))
         cut_call_data = [];
         return

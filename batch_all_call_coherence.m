@@ -1,17 +1,20 @@
 function [mdlResults, params, inputs] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
-pnames = {'outDir', 'baseDir', 'dataDir','fixed_ridge_ks','chunkSize'};
-dflts  = {[],[],[],nan(length(cell_ks),1),NaN};
-[outDir,baseDir,dataDir,fixed_ridge_ks,chunkSize] = internal.stats.parseArgs(pnames,dflts,varargin{:});
+pnames = {'outDir', 'baseDir', 'dataDir','fixed_ridge_ks','chunkSize','inputs','permute_idxs'};
+dflts  = {[],[],[],nan(length(cell_ks),1),NaN,{'call_on','call_ps_pca','bioacoustics'},[]};
+[outDir,baseDir,dataDir,fixed_ridge_ks,chunkSize,inputs,permute_idxs,] = internal.stats.parseArgs(pnames,dflts,varargin{:});
 
 nCells = length(cell_ks);
-inputs = {'call_on','call_ps_pca','bioacoustics'};
-mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
-% permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
-permute_idxs = zeros(1,3);
+
+if isempty(permute_idxs)
+    permute_idxs = zeros(1,length(inputs));
+end
+
 nPermutes = size(permute_idxs,1);
 
-t = tic;
+mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
+
+t = tic;    
 mdlResults = cell(nPermutes,nCells);
 params = cell(nPermutes,nCells);
 batParams = cell(1,nCells);
@@ -24,8 +27,9 @@ for k = 1:nCells
     end
     batParams{k} = struct('batNum',vdCall.batNum{cell_k},'cellInfo',vdCall.cellInfo{cell_k},...
         'baseDir',baseDir,'expDate',vdCall.expDay(cell_k),'lfp_tt',[],...
-        'lfp_channel_switch',[],'dataDir',dataDir,'expType',vdCall.expType,...
-        'callType',vdCall.callType,'boxNum',vdCall.boxNums{b},'band_ridge_k',fixed_ridge_ks(k,:));
+        'lfp_channel_switch',[],'dataDir',dataDir,'expType',vdCall.expType{b},...
+        'callType',vdCall.callType,'boxNum',vdCall.boxNums{b},...
+        'selectCalls',vdCall.selectCalls,'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
 if isnan(chunkSize)
@@ -51,7 +55,7 @@ for perm_k = 1:nPermutes
                 [mdlResults{perm_k,k}, params{perm_k,k}] = deal(NaN);
             end
         end
-        progress = 100*(perm_k/nPermutes);
+        progress = 100*(((perm_k-1)*nChunk + chunk_k)/(nChunk*nPermutes));
         fprintf('%d %% of cells processed\n',round(progress));
         toc(t);
         
