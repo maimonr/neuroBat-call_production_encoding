@@ -44,7 +44,7 @@ f_bounds = logspace(2,log10(max_f),n_freq_bins+1);
 
 yin_wsize = round(winSize*audio_fs);
 
-gpuFlag = true;
+gpuFlag = false;
 
 featureNames = {'f0','wEnt','RMS'};
 
