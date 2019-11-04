@@ -1,19 +1,12 @@
 function [mdlResults, params, inputs] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
-pnames = {'outDir', 'baseDir', 'dataDir','fixed_ridge_ks','chunkSize','inputs','permute_idxs'};
-dflts  = {[],[],[],nan(length(cell_ks),1),NaN,{'call_on','call_ps_pca','bioacoustics'},[]};
-[outDir,baseDir,dataDir,fixed_ridge_ks,chunkSize,inputs,permute_idxs,] = internal.stats.parseArgs(pnames,dflts,varargin{:});
-
+pnames = {'output_folder', 'baseDir', 'fixed_ridge_ks','dataDir','chunkSize','output_fname','lmResults'}; 
+dflts  = {pwd,[], nan(length(cell_ks),1),[],NaN,[],[]}; 
+[output_folder,baseDir,fixed_ridge_ks,dataDir,chunkSize,output_fname,lmResults] = internal.stats.parseArgs(pnames,dflts,varargin{:}); 
+ 
 if isempty(output_fname)
     output_fname = fullfile(output_folder,['lmResults_' datestr(date,'mmddyyyy') '.mat']);
 end
-nCells = length(cell_ks);
-
-if isempty(permute_idxs)
-    permute_idxs = zeros(1,length(inputs));
-end
-
-nPermutes = size(permute_idxs,1);
 
 if isempty(lmResults)
     inputs = {'call_on','call_ps_pca','bioacoustics'};

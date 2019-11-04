@@ -413,7 +413,7 @@ end
 [mse,R2,rho,logLikelihood] = deal(nan(output_size,class(ZTy)));
 [ridgeKMat{1:nInput}] = ndgrid(ridgeKs);
 
-parfor k = 1:nIteration
+for k = 1:nIteration
     
     band_ridge_ks = cellfun(@(x) x(k),ridgeKMat);
     lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
@@ -634,7 +634,7 @@ elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
         case 'selfCall'
             idx = strcmp({cut_call_data.batNum},batParams.batNum);
         case 'otherCall'
-            idx = ~strcmp({cut_call_data.batNum},batParams.batNum);
+            idx = ~strcmp({cut_call_data.batNum},batParams.batNum) & strcmp({cut_call_data.batNum},'unidentified');
     end
     cut_call_data = cut_call_data(idx);
     if all(isnan([cut_call_data.corrected_callpos]))
