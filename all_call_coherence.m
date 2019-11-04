@@ -19,14 +19,14 @@ if nargin < 4
 end
 neural_data_type = 'spikes';
 minCalls = 10;
-nFilt = 500;
+nFilt = 250;
 offset = nFilt/2;
 smoothing_bin_size = 5;
 spike_bin_size = 5;
 smoothing_span_size = 100;
 call_time_offset = 2e3;
 
-cvType = 'nested_cv';
+cvType = 'fixed_ridge_k_cv';
 banded_ridge_flag = true;
 
 audio_fs = 250e3;
@@ -40,7 +40,7 @@ f_bounds = logspace(2,log10(max_f),n_freq_bins+1);
 
 yin_wsize = round(winSize*audio_fs);
 
-gpuFlag = true;
+gpuFlag = false;
 
 featureNames = {'f0','wEnt','RMS'};
 

@@ -1,15 +1,15 @@
 function [mdlResults, params, inputs] = batch_all_call_coherence(vdCall,cell_ks,varargin)
 
-pnames = {'output_folder', 'fixed_ridge_ks','dataDir','chunkSize','output_fname','lmResults'};
-dflts  = {pwd,nan(length(cell_ks),1),[],NaN,[],[]};
-[output_folder,fixed_ridge_ks,dataDir,chunkSize,output_fname,lmResults] = internal.stats.parseArgs(pnames,dflts,varargin{:});
+pnames = {'output_folder', 'baseDir', 'fixed_ridge_ks','dataDir','chunkSize','output_fname','lmResults'};
+dflts  = {pwd,[], nan(length(cell_ks),1),[],NaN,[],[]};
+[output_folder,baseDir,fixed_ridge_ks,dataDir,chunkSize,output_fname,lmResults] = internal.stats.parseArgs(pnames,dflts,varargin{:});
 
 if isempty(output_fname)
     output_fname = fullfile(output_folder,['lmResults_' datestr(date,'mmddyyyy') '.mat']);
 end
 
 if isempty(lmResults)
-    input = {'call_on','call_ps_pca','bioacoustics'};
+    inputs = {'call_on','call_ps_pca','bioacoustics'};
     mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
     permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
     start_perm_k = 1;
@@ -29,7 +29,7 @@ else
     
     mdlResults = lmResults.mdlResults;
     params = lmResults.params;
-    input = lmResults.inputs;
+    inputs = lmResults.inputs;
     
     mdlParams = lmResults.params{1}.mdlParams;
     mdlParams.permuteInput = [];
@@ -49,7 +49,7 @@ for k = 1:nCells
     end
     batParams{k} = struct('batNum',vdCall.batNum{cell_k},'cellInfo',vdCall.cellInfo{cell_k},...
         'baseDir',baseDir,'expDate',vdCall.expDay(cell_k),'lfp_tt',[],...
-        'lfp_channel_switch',[],'dataDir',dataDir,'expType',vdCall.expType,...
+        'lfp_channel_switch',[],'dataDir',dataDir,'expType',vdCall.expType{b},...
         'callType',vdCall.callType,'boxNum',vdCall.boxNums{b},'band_ridge_k',fixed_ridge_ks(k,:));
 end
 
@@ -58,7 +58,7 @@ if isnan(chunkSize)
     cell_chunks = 1:nCells;
 else
     nChunk = ceil(nCells/chunkSize);
-    cell_chunks = 1:(nCells+rem(nCells,nChunk));
+    cell_chunks = 1:(nChunk*chunkSize);
     cell_chunks = reshape(cell_chunks,chunkSize,[]);
     cell_chunks(~ismember(cell_chunks,1:nCells)) = NaN;
 end
@@ -89,7 +89,7 @@ for perm_k = start_perm_k:nPermutes
         toc(t);
         if ~isempty(output_folder)
             try
-                lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{input},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
+                lmResults = struct('mdlResults',{mdlResults},'params',{params},'inputs',{inputs},'permute_idxs',permute_idxs,'cell_ks',cell_ks);
                 save(output_fname,'-v7.3','-struct','lmResults');
             catch err
                 keyboard
