@@ -76,7 +76,7 @@ for perm_k = start_perm_k:nPermutes
     for chunk_k = start_chunk_k:nChunk
         chunk_cell_ks = cell_chunks(:,chunk_k);
         chunk_cell_ks = chunk_cell_ks(~isnan(chunk_cell_ks))';
-        parfor k = chunk_cell_ks
+        for k = chunk_cell_ks
             try
                 [mdlResults{perm_k,k}, params{perm_k,k}] = all_call_coherence(batParams{k},inputs,'ridge',mdlParams);
             catch err

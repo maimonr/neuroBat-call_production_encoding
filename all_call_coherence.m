@@ -634,7 +634,7 @@ elseif any(strcmp(batParams.expType,{'adult','adult_operant'}))
         case 'selfCall'
             idx = strcmp({cut_call_data.batNum},batParams.batNum);
         case 'otherCall'
-            idx = ~strcmp({cut_call_data.batNum},batParams.batNum) & strcmp({cut_call_data.batNum},'unidentified');
+            idx = ~strcmp({cut_call_data.batNum},batParams.batNum) & ~strcmp({cut_call_data.batNum},'unidentified');
     end
     cut_call_data = cut_call_data(idx);
     if all(isnan([cut_call_data.corrected_callpos]))
@@ -929,8 +929,12 @@ call_ps = 10*log10([all_call_ps{:}]+eps);
 
 switch pcaFlag
     case 'pca'
-        [~,score] = pca(call_ps','Economy',false);
-        
+        X = call_ps';
+        mu = mean(X);
+        X = bsxfun(@minus,X,mu);
+        [U,S] = svd(X,0);
+        eVal = diag(S);
+        score = bsxfun(@times,U,eVal');        
         call_ps_feature = score(:,params.pc_idx)';
         
     case 'pca_ortho'
