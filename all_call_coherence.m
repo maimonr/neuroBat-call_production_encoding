@@ -99,8 +99,6 @@ if isnan(call_ts)
 end
 
 binning_idx = slidingWin(length(call_ts),params.smoothing_bin_size,0);
-call_wf = calculate_all_call_envelope(cut_call_data,all_call_timestamps,...
-    included_call_times,included_call_ks,params);
 
 if nargout > 2
     if strcmp(neural_data_type,'lfp')
@@ -109,6 +107,8 @@ if nargout > 2
         neural_call_data = get_call_neural_data(timestamps,neural_data,call_ts,binning_idx,params);
         neural_data_for_coherence = neural_call_data;
     end
+    call_wf = calculate_all_call_envelope(cut_call_data,all_call_timestamps,...
+        included_call_times,included_call_ks,params);
     [cxy,f] = mscohere(call_wf,neural_data_for_coherence,hamming(2^6),2^5,2^10,1e3);
     coherence_results = struct('coh',cxy,'f',f);
     if mdlParams.onlyCoherence
@@ -125,7 +125,7 @@ nChannel = size(neural_call_data,2);
 
 call_feats = cell(1,nInput);
 for input_k = 1:nInput
-    call_feats{input_k} = get_feature(inputs{input_k},call_wf,cut_call_data,...
+    call_feats{input_k} = get_feature(inputs{input_k},cut_call_data,...
         all_call_timestamps,included_call_times,included_call_ks,params);
 end
 
@@ -413,7 +413,7 @@ end
 [mse,R2,rho,logLikelihood] = deal(nan(output_size,class(ZTy)));
 [ridgeKMat{1:nInput}] = ndgrid(ridgeKs);
 
-for k = 1:nIteration
+parfor k = 1:nIteration
     
     band_ridge_ks = cellfun(@(x) x(k),ridgeKMat);
     lambda_mat = get_lambda_mat(pred_idxs,band_ridge_ks,nInput,p);
@@ -671,9 +671,14 @@ end
 
 end
 
-function feature = get_feature(input,call_wf,cut_call_data,...
+function feature = get_feature(input,cut_call_data,...
     all_call_timestamps,included_call_times,included_call_ks,params)
 
+
+if any(strcmp(input,{'call_wf','call_on','call_start','call_end','batID'}))
+   [call_wf, bat_ID] = calculate_all_call_envelope(cut_call_data,all_call_timestamps,...
+        included_call_times,included_call_ks,params); 
+end
 
 
 switch input
@@ -712,6 +717,17 @@ switch input
         
         orthoFlag = true;
         feature = calculate_bioacoustics(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params,orthoFlag);
+        
+    case 'batID'
+        
+        all_bat_IDs = unique(bat_ID(bat_ID ~= 0));
+        nBat = length(all_bat_IDs);
+        feature = zeros(nBat,length(call_wf));
+        for bat_k = 1:nBat
+            current_bat_id = all_bat_IDs(bat_k);
+            feature(bat_k,bat_ID == current_bat_id) = 1;
+        end
+        
 end
 
 end

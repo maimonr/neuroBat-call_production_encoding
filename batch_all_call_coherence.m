@@ -9,9 +9,9 @@ if isempty(output_fname)
 end
 
 if isempty(lmResults)
-    inputs = {'call_on','call_ps_pca','bioacoustics'};
+    inputs = {'call_on','batID','bioacoustics'};
     mdlParams = struct('onlyCoherence',false,'onlyFeats',false,'onlyStandardize',false,'onlyNeuralData',false,'permuteInput',[]);
-    permute_idxs = [0 0 0; 1 0 0; 0 1 0; 0 0 1; 0 1 1; 1 0 1; 1 1 0; 1 1 1];
+    permute_idxs = [0 0 0; 0 1 0];
     start_perm_k = 1;
     start_cell_k = 1;
     
@@ -56,7 +56,7 @@ end
 
 if isnan(chunkSize)
     nChunk = 1;
-    cell_chunks = 1:nCells;
+    cell_chunks = (1:nCells)';
 else
     nChunk = ceil(nCells/chunkSize);
     cell_chunks = 1:(nChunk*chunkSize);
