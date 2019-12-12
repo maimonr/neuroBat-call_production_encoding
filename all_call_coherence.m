@@ -259,7 +259,7 @@ switch mdlType
                     nested_Xtrain = design_mat(nested_trainIdx,:);
                     
                     mseRidge_nested{nest_cv_k} = cat(nInput+1,mseRidge_cv{:});
-                    mseRidge{nest_cv_k} = mean(mseRidge_nested{nest_cv_k},nInput+1);
+                    mseRidge{nest_cv_k} = nanmean(mseRidge_nested{nest_cv_k},nInput+1);
                     [~,idx] = min(mseRidge{nest_cv_k}(:));
                     band_ridge_idx = cell(1,nInput);
                     [band_ridge_idx{1:nInput}] = ind2sub(repmat(nRidgeK,1,nInput),idx);
