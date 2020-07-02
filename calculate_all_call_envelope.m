@@ -1,7 +1,10 @@
 function [call_wf, bat_ID] = calculate_all_call_envelope(cut_call_data,all_call_timestamps,included_call_times,included_call_ks,params)
 
 [all_call_wf,all_call_bat_id] = deal(cell(1,length(all_call_timestamps)));
-all_bat_nums = unique({cut_call_data([included_call_ks{:}]).batNum});
+all_bat_nums = {cut_call_data.batNum};
+multi_bat_idx = cellfun(@iscell,all_bat_nums);
+all_bat_nums = [all_bat_nums(~multi_bat_idx) [all_bat_nums{multi_bat_idx}]];
+all_bat_nums = unique(all_bat_nums);
 
 for k = 1:length(all_call_timestamps)
     
@@ -12,7 +15,11 @@ for k = 1:length(all_call_timestamps)
         cutEnv = downsample(cutEnv,params.envelope_ds_factor);
         
         batNum = cut_call_data(included_call_ks{k}(call_wf_k)).batNum;
-        bat_id_num = find(strcmp(all_bat_nums,batNum));
+        if ~iscell(batNum)
+            bat_id_num = find(strcmp(all_bat_nums,batNum));
+        else
+            bat_id_num = 0;
+        end
         
         idx = 1 + (params.call_time_offset + included_call_times{k}(call_wf_k) - included_call_times{k}(1));
         all_call_wf{k}(idx:idx+length(cutEnv)-1) = cutEnv;
